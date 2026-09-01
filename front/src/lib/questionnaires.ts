@@ -29,7 +29,9 @@ export type Response = {
   answers: Record<string, unknown>;
   status?: string | null;
   submitted_at?: string | null;
+  submittedAt?: string | null;
   created_at?: string;
+  createdAt?: string;
   respondent?: { name?: string; email?: string } | null;
 };
 
