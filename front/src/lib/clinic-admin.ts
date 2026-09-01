@@ -4,8 +4,9 @@ export const clinicAdminTokenKey = "careflow.admin-token";
 export type AuthSession = { token: string; user: { id: string | number; name?: string; email?: string }; clinic?: Clinic };
 export type Clinic = { id: string | number; name: string; slug?: string; publicDomain?: string | null; settings?: Record<string, unknown>; branding?: Record<string, unknown>; questionnairesCount?: number };
 export type ClinicSettings = { name: string; publicDomain: string; timezone: string; defaultCallingCode: string; supportEmail: string };
-export type AdminQuestion = { id: string | number; key?: string; label?: string | null; description?: string | null; type?: string; isRequired?: boolean };
-export type AdminQuestionnaire = { id: string | number; name: string; slug: string; description?: string | null; status?: string; submissionsCount?: number; questions?: AdminQuestion[] };
+export type AdminQuestion = { id: string | number; key?: string; label?: string | null; description?: string | null; type?: string; isRequired?: boolean; sortOrder?: number };
+export type ResponseWorkspaceLayout = { columnOrder?: string[]; hiddenColumns?: string[] };
+export type AdminQuestionnaire = { id: string | number; name: string; slug: string; description?: string | null; status?: string; submissionsCount?: number; questions?: AdminQuestion[]; layout?: Record<string, unknown> | null };
 export type AdminResponse = { id: string | number; uuid?: string; status?: string; metadata?: Record<string, unknown>; submittedAt?: string; questionnaire?: { id: string | number; name: string; slug?: string }; answers?: Record<string, unknown> };
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> { const token = typeof window === "undefined" ? null : window.localStorage.getItem(clinicAdminTokenKey); const response = await fetch(`${apiBase}${path}`, { ...init, headers: { Accept: "application/json", ...(init?.body ? { "Content-Type": "application/json" } : {}), ...(token ? { Authorization: `Bearer ${token}` } : {}), ...init?.headers } }); const body = await response.json().catch(() => null); if (!response.ok) throw new Error(body?.message ?? "We could not complete that request. Please try again."); return (body?.data ?? body) as T; }
@@ -23,6 +24,7 @@ export const clinicAdminApi = {
   forms: () => request<AdminQuestionnaire[]>("/admin/clinic/questionnaires"),
   form: (id: string | number) => request<AdminQuestionnaire>(`/admin/clinic/questionnaires/${id}`),
   updateForm: (id: string | number, payload: Pick<AdminQuestionnaire, "name" | "description" | "status">) => request<AdminQuestionnaire>(`/admin/clinic/questionnaires/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
+  updateResponseWorkspace: (id: string | number, layout: Record<string, unknown>) => request<AdminQuestionnaire>(`/admin/clinic/questionnaires/${id}`, { method: "PATCH", body: JSON.stringify({ layout }) }),
   updateQuestion: (formId: string | number, questionId: string | number, payload: Pick<AdminQuestion, "label" | "description">) => request<AdminQuestion>(`/admin/clinic/questionnaires/${formId}/questions/${questionId}`, { method: "PATCH", body: JSON.stringify(payload) }),
   responses: (id: string | number) => request<AdminResponse[]>(`/admin/clinic/questionnaires/${id}/responses?per_page=200`),
   allResponses: () => request<AdminResponse[]>("/admin/clinic/responses?per_page=200"),

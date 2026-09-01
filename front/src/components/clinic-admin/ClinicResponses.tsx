@@ -1,18 +1,17 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { clinicAdminApi, type AdminQuestionnaire, type AdminResponse } from "@/lib/clinic-admin";
+import { clinicAdminApi, type AdminQuestionnaire, type AdminResponse, type ResponseWorkspaceLayout } from "@/lib/clinic-admin";
 
 type ViewId = "all" | "new" | "in_review" | "follow_up" | "reviewed" | "archived" | "kanban";
 type SortDirection = "asc" | "desc";
 type ToolbarPanel = "filter" | "sort" | "fields" | null;
-type FieldColumn = { key: string; label: string; type?: string };
+type FieldColumn = { key: string; label: string; type?: string; sortOrder?: number };
 type FilterOperator = "contains" | "equals" | "not_equals" | "empty" | "not_empty";
 type FilterRule = { id: string; field: string; operator: FilterOperator; value: string };
 type SavedView = { search: string; filters?: FilterRule[]; statuses?: string[]; sortKey: string; sortDirection: SortDirection; visibleFields: string[]; groupByStatus: boolean };
 
 const systemFields: FieldColumn[] = [
-  { key: "__form", label: "Form", type: "system" },
   { key: "__status", label: "Status", type: "system" },
   { key: "__submittedAt", label: "Submitted", type: "date" },
 ];
@@ -54,7 +53,6 @@ function Icon({ name, className = "h-4 w-4" }: { name: "search" | "filter" | "so
 
 function normalizedStatus(status?: string): string { return !status || status === "submitted" ? "new" : status; }
 function statusConfig(status?: string) { return statuses.find((item) => item.id === normalizedStatus(status)) ?? statuses[0]; }
-function titleFromKey(key: string): string { return key.replace(/[_-]+/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase()); }
 
 function formatValue(value: unknown): string {
   if (value === null || value === undefined || value === "") return "—";
@@ -112,6 +110,17 @@ function editableField(field: FieldColumn): boolean {
 
 function GridIcon({ type }: { type: "grid" | "kanban" }) { return <Icon name={type} className="h-3.5 w-3.5" />; }
 
+function responseWorkspaceLayout(form?: AdminQuestionnaire): ResponseWorkspaceLayout {
+  const layout = form?.layout;
+  if (!layout || typeof layout !== "object") return {};
+  const workspace = (layout as Record<string, unknown>).response_workspace;
+  return workspace && typeof workspace === "object" ? workspace as ResponseWorkspaceLayout : {};
+}
+
+function isResponseColumn(question: NonNullable<AdminQuestionnaire["questions"]>[number]): boolean {
+  return Boolean(question.key && question.label?.trim()) && !["pagebreak", "content", "layout", "divider", "html", "hidden"].includes(question.type ?? "");
+}
+
 export default function ClinicResponses() {
   const [forms, setForms] = useState<AdminQuestionnaire[]>([]);
   const [formId, setFormId] = useState("");
@@ -122,6 +131,7 @@ export default function ClinicResponses() {
   const [sortKey, setSortKey] = useState("submittedAt");
   const [sortDirection, setSortDirection] = useState<SortDirection>("desc");
   const [visibleFields, setVisibleFields] = useState<string[]>([]);
+  const [columnOrder, setColumnOrder] = useState<string[]>([]);
   const [groupByStatus, setGroupByStatus] = useState(false);
   const [panel, setPanel] = useState<ToolbarPanel>(null);
   const [selectedIds, setSelectedIds] = useState<Array<string | number>>([]);
@@ -130,25 +140,31 @@ export default function ClinicResponses() {
   const [refreshing, setRefreshing] = useState(false);
   const [savingId, setSavingId] = useState<string | number | null>(null);
   const [savingCell, setSavingCell] = useState("");
+  const [savingWorkspace, setSavingWorkspace] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const selectedForm = forms.find((form) => String(form.id) === formId);
 
   const fields = useMemo<FieldColumn[]>(() => {
-    const columns = new Map<string, FieldColumn>();
-    forms.filter((form) => !formId || String(form.id) === formId).forEach((form) => form.questions?.forEach((question) => {
-      if (question.key) columns.set(question.key, { key: question.key, label: question.label || titleFromKey(question.key), type: question.type });
-    }));
-    responses.filter((response) => !formId || String(response.questionnaire?.id) === formId).forEach((response) => Object.keys(response.answers ?? {}).forEach((key) => {
-      if (!columns.has(key)) columns.set(key, { key, label: titleFromKey(key) });
-    }));
-    return Array.from(columns.values());
-  }, [formId, forms, responses]);
-  const tableFields = useMemo(() => [...systemFields, ...fields], [fields]);
+    return (selectedForm?.questions ?? [])
+      .filter(isResponseColumn)
+      .map((question) => ({ key: question.key as string, label: question.label as string, type: question.type, sortOrder: question.sortOrder }))
+      .sort((left, right) => (left.sortOrder ?? 0) - (right.sortOrder ?? 0));
+  }, [selectedForm]);
+  const tableFields = useMemo(() => {
+    const baseFields = [...systemFields, ...fields];
+    const byKey = new Map(baseFields.map((field) => [field.key, field]));
+    const ordered = columnOrder.map((key) => byKey.get(key)).filter((field): field is FieldColumn => Boolean(field));
+    return [...ordered, ...baseFields.filter((field) => !columnOrder.includes(field.key))];
+  }, [columnOrder, fields]);
+  const orderedFields = tableFields.filter((field) => !field.key.startsWith("__"));
+  const visibleTableFields = tableFields.filter((field) => visibleFields.includes(field.key));
 
-  const loadResponses = async (silent = false) => {
+  const loadResponses = async (questionnaireId: string, silent = false) => {
+    if (!questionnaireId) return;
     if (silent) setRefreshing(true); else setLoading(true);
     setError("");
-    try { setResponses(await clinicAdminApi.allResponses()); }
+    try { setResponses(await clinicAdminApi.responses(questionnaireId)); }
     catch (requestError) { setError(requestError instanceof Error ? requestError.message : "We could not load responses."); }
     finally { setLoading(false); setRefreshing(false); }
   };
@@ -156,8 +172,9 @@ export default function ClinicResponses() {
   useEffect(() => {
     clinicAdminApi.forms().then((items) => {
       setForms(items);
-      setFormId(new URLSearchParams(window.location.search).get("form") ?? "");
-      void loadResponses();
+      const requested = new URLSearchParams(window.location.search).get("form");
+      setFormId(items.some((form) => String(form.id) === requested) ? requested ?? "" : "");
+      setLoading(false);
     }).catch((requestError) => {
       setError(requestError instanceof Error ? requestError.message : "We could not load clinic forms.");
       setLoading(false);
@@ -165,28 +182,25 @@ export default function ClinicResponses() {
   }, []);
 
   useEffect(() => {
-    setSelectedIds([]); setOpenResponse(null);
-    const saved = window.localStorage.getItem("careflow.response-view.submissions");
-    if (saved) {
-      try {
-        const view = JSON.parse(saved) as SavedView;
-        const legacyFilters = (view.statuses ?? []).map((status) => ({ id: crypto.randomUUID(), field: "__status", operator: "equals" as const, value: statusConfig(status).label }));
-        setSearch(view.search ?? ""); setFilterRules(view.filters ?? legacyFilters); setSortKey(view.sortKey ?? "submittedAt");
-        setSortDirection(view.sortDirection ?? "desc"); setVisibleFields(view.visibleFields ?? []); setGroupByStatus(view.groupByStatus ?? false);
-      } catch { window.localStorage.removeItem("careflow.response-view.submissions"); }
-    } else {
-      setSearch(""); setFilterRules([]); setSortKey("submittedAt"); setSortDirection("desc"); setVisibleFields([]); setGroupByStatus(false);
+    if (!formId) {
+      setResponses([]);
+      return;
     }
-  }, [formId]);
 
-  useEffect(() => {
-    if (tableFields.length > 0 && !tableFields.some((field) => visibleFields.includes(field.key))) setVisibleFields([...systemFields.map((field) => field.key), ...fields.slice(0, 8).map((field) => field.key)]);
-  }, [fields, tableFields, visibleFields]);
+    const workspace = responseWorkspaceLayout(selectedForm);
+    const availableColumns = [...systemFields, ...fields].map((field) => field.key);
+    const saved = window.localStorage.getItem(`careflow.response-view.${formId}`);
+    let view: SavedView | null = null;
+    try { view = saved ? JSON.parse(saved) as SavedView : null; } catch { window.localStorage.removeItem(`careflow.response-view.${formId}`); }
+    setSelectedIds([]); setOpenResponse(null); setSearch(view?.search ?? ""); setFilterRules(view?.filters ?? []); setSortKey(view?.sortKey ?? "submittedAt"); setSortDirection(view?.sortDirection ?? "desc"); setGroupByStatus(view?.groupByStatus ?? false);
+    setColumnOrder(workspace.columnOrder?.filter((key) => availableColumns.includes(key)) ?? []);
+    setVisibleFields(availableColumns.filter((key) => !workspace.hiddenColumns?.includes(key)));
+    void loadResponses(formId);
+  }, [fields, formId, selectedForm]);
 
-  const shownFields = fields.filter((field) => visibleFields.includes(field.key));
   const hiddenFieldCount = tableFields.filter((field) => !visibleFields.includes(field.key)).length;
   const activeViewStatus = views.find((view) => view.id === activeView)?.status;
-  const sourceResponses = useMemo(() => responses.filter((response) => !formId || String(response.questionnaire?.id) === formId), [formId, responses]);
+  const sourceResponses = responses;
   const displayedResponses = useMemo(() => {
     const query = search.trim().toLowerCase();
     const filtered = sourceResponses.filter((response) => {
@@ -245,23 +259,65 @@ export default function ClinicResponses() {
     } finally { setSavingCell(""); }
   };
 
+  const persistWorkspace = async (nextOrder: string[], nextVisibleFields: string[]) => {
+    if (!selectedForm) return;
+    const availableColumns = [...systemFields, ...fields].map((field) => field.key);
+    const existingLayout = selectedForm.layout ?? {};
+    const workspace = responseWorkspaceLayout(selectedForm);
+    setSavingWorkspace(true);
+    try {
+      const updated = await clinicAdminApi.updateResponseWorkspace(selectedForm.id, {
+        ...existingLayout,
+        response_workspace: {
+          ...workspace,
+          columnOrder: nextOrder.filter((key) => availableColumns.includes(key)),
+          hiddenColumns: availableColumns.filter((key) => !nextVisibleFields.includes(key)),
+        },
+      });
+      setForms((items) => items.map((form) => form.id === updated.id ? updated : form));
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : "We could not save this table layout.");
+    } finally { setSavingWorkspace(false); }
+  };
+
+  const updateVisibleFields = (nextVisibleFields: string[]) => {
+    setVisibleFields(nextVisibleFields);
+    void persistWorkspace(columnOrder, nextVisibleFields);
+  };
+
+  const moveColumn = (draggedKey: string, targetKey: string) => {
+    if (draggedKey === targetKey) return;
+    const keys = tableFields.map((field) => field.key);
+    const from = keys.indexOf(draggedKey);
+    const to = keys.indexOf(targetKey);
+    if (from < 0 || to < 0) return;
+    keys.splice(to, 0, keys.splice(from, 1)[0]);
+    setColumnOrder(keys);
+    void persistWorkspace(keys, visibleFields);
+  };
+
   const saveView = () => {
     const view: SavedView = { search, filters: filterRules, sortKey, sortDirection, visibleFields, groupByStatus };
-    window.localStorage.setItem("careflow.response-view.submissions", JSON.stringify(view));
+    window.localStorage.setItem(`careflow.response-view.${formId}`, JSON.stringify(view));
     setNotice("View preferences saved"); window.setTimeout(() => setNotice(""), 2200);
+  };
+  const selectForm = (id: string) => {
+    setFormId(id);
+    window.history.replaceState(null, "", `/admin/responses?form=${id}`);
   };
   const toggleSelection = (id: string | number) => setSelectedIds((items) => items.includes(id) ? items.filter((item) => item !== id) : [...items, id]);
   const allSelected = displayedResponses.length > 0 && displayedResponses.every((response) => selectedIds.includes(response.id));
   const toggleAll = () => setSelectedIds(allSelected ? [] : displayedResponses.map((response) => response.id));
 
   if (error && forms.length === 0) return <div className="rounded-2xl border border-error-200 bg-error-50 p-5 text-sm text-error-700 dark:border-error-500/30 dark:bg-error-500/10 dark:text-error-300">{error}</div>;
+  if (!formId || !selectedForm) return <FormPicker forms={forms} onSelect={selectForm} />;
 
   return (
     <div className="relative overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-sm dark:border-gray-800 dark:bg-gray-950">
       {notice && <div className="absolute right-5 top-4 z-50 rounded-lg bg-gray-900 px-3 py-2 text-xs font-medium text-white shadow-lg dark:bg-white dark:text-gray-900">{notice}</div>}
       <div className="border-b border-gray-200 bg-[#f7fbfc] px-3 pt-3 dark:border-gray-800 dark:bg-gray-900">
         <div className="flex items-center gap-1 overflow-x-auto" role="tablist" aria-label="Response tables">
-          <button type="button" role="tab" aria-selected className="shrink-0 rounded-t-lg border-x border-t border-gray-200 bg-white px-4 py-2.5 text-xs font-semibold text-gray-900 dark:border-gray-700 dark:bg-gray-950 dark:text-white">Form submissions<span className="ml-2 rounded-full bg-gray-100 px-1.5 py-0.5 text-[10px] text-gray-500 dark:bg-gray-800 dark:text-gray-400">{responses.length}</span></button>
+          <button type="button" role="tab" aria-selected className="shrink-0 rounded-t-lg border-x border-t border-gray-200 bg-white px-4 py-2.5 text-xs font-semibold text-gray-900 dark:border-gray-700 dark:bg-gray-950 dark:text-white">{selectedForm.name}<span className="ml-2 rounded-full bg-gray-100 px-1.5 py-0.5 text-[10px] text-gray-500 dark:bg-gray-800 dark:text-gray-400">{responses.length}</span></button>
           <button type="button" disabled title="Follow-up tables will plug into this workspace" className="shrink-0 px-3 py-2 text-xs font-medium text-gray-400">+ Follow-up table</button>
         </div>
       </div>
@@ -284,24 +340,28 @@ export default function ClinicResponses() {
             <ToolbarButton icon="filter" label={filterRules.length ? `Filter · ${filterRules.length}` : "Filter"} active={panel === "filter" || filterRules.length > 0} onClick={() => setPanel(panel === "filter" ? null : "filter")} />
             <ToolbarButton icon="group" label="Group" active={groupByStatus} onClick={() => setGroupByStatus((value) => !value)} disabled={activeView === "kanban"} />
             <ToolbarButton icon="sort" label="Sort" active={panel === "sort" || sortKey !== "submittedAt" || sortDirection !== "desc"} onClick={() => setPanel(panel === "sort" ? null : "sort")} />
-            <ToolbarButton icon="fields" label={hiddenFieldCount ? `${hiddenFieldCount} hidden` : "Fields"} active={panel === "fields" || hiddenFieldCount > 0} onClick={() => setPanel(panel === "fields" ? null : "fields")} />
+            <ToolbarButton icon="fields" label={savingWorkspace ? "Saving…" : hiddenFieldCount ? `${hiddenFieldCount} hidden` : "Fields"} active={panel === "fields" || hiddenFieldCount > 0} onClick={() => setPanel(panel === "fields" ? null : "fields")} />
             <div className="relative ml-auto min-w-[170px] grow sm:max-w-xs sm:grow-0"><Icon name="search" className="pointer-events-none absolute left-2.5 top-2 h-4 w-4 text-gray-400" /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search records" className="h-8 w-full rounded-md border border-gray-200 bg-gray-50 pl-8 pr-3 text-xs text-gray-800 outline-none focus:border-brand-400 focus:bg-white dark:border-gray-700 dark:bg-gray-900 dark:text-white" /></div>
             <button type="button" onClick={saveView} className="flex h-8 items-center gap-1.5 rounded-md px-2 text-xs font-medium text-gray-500 hover:bg-gray-100 hover:text-gray-800 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white"><Icon name="save" className="h-3.5 w-3.5" />Save view</button>
-            <select value={formId} onChange={(event) => setFormId(event.target.value)} aria-label="Filter by form" className="h-8 max-w-40 rounded-md border border-gray-200 bg-white px-2 text-xs text-gray-700 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200"><option value="">All forms</option>{forms.map((form) => <option key={form.id} value={form.id}>{form.name}</option>)}</select>
-            <button type="button" onClick={() => void loadResponses(true)} disabled={refreshing} aria-label="Refresh responses" className="grid h-8 w-8 place-items-center rounded-md text-gray-500 hover:bg-gray-100 hover:text-gray-800 disabled:opacity-50 dark:text-gray-400 dark:hover:bg-gray-800"><Icon name="refresh" className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`} /></button>
+            <select value={formId} onChange={(event) => selectForm(event.target.value)} aria-label="Select a form" className="h-8 max-w-48 rounded-md border border-brand-300 bg-white px-2 text-xs font-semibold text-gray-700 outline-none focus:border-brand-500 dark:border-brand-600 dark:bg-gray-900 dark:text-gray-200">{forms.map((form) => <option key={form.id} value={form.id}>{form.name}</option>)}</select>
+            <button type="button" onClick={() => void loadResponses(formId, true)} disabled={refreshing} aria-label="Refresh responses" className="grid h-8 w-8 place-items-center rounded-md text-gray-500 hover:bg-gray-100 hover:text-gray-800 disabled:opacity-50 dark:text-gray-400 dark:hover:bg-gray-800"><Icon name="refresh" className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`} /></button>
           </div>
           <div className="relative">
             {panel === "filter" && <FilterPanel fields={tableFields} rules={filterRules} onChange={setFilterRules} onClose={() => setPanel(null)} />}
             {panel === "sort" && <SortPanel fields={fields} sortKey={sortKey} direction={sortDirection} onSortKey={setSortKey} onDirection={setSortDirection} onClose={() => setPanel(null)} />}
-            {panel === "fields" && <FieldsPanel fields={tableFields} visible={visibleFields} onChange={setVisibleFields} onClose={() => setPanel(null)} />}
+            {panel === "fields" && <FieldsPanel fields={tableFields} visible={visibleFields} onChange={updateVisibleFields} onClose={() => setPanel(null)} />}
             {error && <div className="border-b border-error-200 bg-error-50 px-4 py-3 text-xs text-error-700 dark:border-error-500/20 dark:bg-error-500/10 dark:text-error-300">{error}<button type="button" onClick={() => setError("")} className="ml-3 font-semibold underline">Dismiss</button></div>}
-            {loading ? <div className="grid min-h-[520px] place-items-center"><div className="flex items-center gap-2 text-sm text-gray-500"><span className="h-4 w-4 animate-spin rounded-full border-2 border-brand-500 border-t-transparent" />Loading records…</div></div> : activeView === "kanban" ? <Kanban responses={displayedResponses} fields={fields} savingId={savingId} onOpen={setOpenResponse} onStatus={updateStatus} /> : <GridView responses={displayedResponses} fields={shownFields} visibleColumns={visibleFields} selectedIds={selectedIds} allSelected={allSelected} groupByStatus={groupByStatus} savingId={savingId} savingCell={savingCell} onToggle={toggleSelection} onToggleAll={toggleAll} onOpen={setOpenResponse} onStatus={updateStatus} onAnswer={updateAnswer} />}
+            {loading ? <div className="grid min-h-[520px] place-items-center"><div className="flex items-center gap-2 text-sm text-gray-500"><span className="h-4 w-4 animate-spin rounded-full border-2 border-brand-500 border-t-transparent" />Loading responses for {selectedForm.name}…</div></div> : activeView === "kanban" ? <Kanban responses={displayedResponses} fields={orderedFields} savingId={savingId} onOpen={setOpenResponse} onStatus={updateStatus} /> : <GridView responses={displayedResponses} columns={visibleTableFields} primaryFields={orderedFields} selectedIds={selectedIds} allSelected={allSelected} groupByStatus={groupByStatus} savingId={savingId} savingCell={savingCell} onToggle={toggleSelection} onToggleAll={toggleAll} onOpen={setOpenResponse} onStatus={updateStatus} onAnswer={updateAnswer} onMoveColumn={moveColumn} />}
           </div>
         </main>
       </div>
-      {openResponse && <RecordDrawer response={openResponse} fields={fields} saving={savingId === openResponse.id} onClose={() => setOpenResponse(null)} onStatus={(status) => void updateStatus(openResponse, status)} />}
+      {openResponse && <RecordDrawer response={openResponse} fields={orderedFields} saving={savingId === openResponse.id} onClose={() => setOpenResponse(null)} onStatus={(status) => void updateStatus(openResponse, status)} />}
     </div>
   );
+}
+
+function FormPicker({ forms, onSelect }: { forms: AdminQuestionnaire[]; onSelect: (id: string) => void }) {
+  return <div className="rounded-2xl border border-gray-200 bg-white p-6 shadow-sm dark:border-gray-800 dark:bg-gray-950 sm:p-8"><div className="max-w-2xl"><p className="text-xs font-bold uppercase tracking-wider text-brand-600">Response workspace</p><h2 className="mt-2 text-2xl font-bold tracking-tight text-gray-900 dark:text-white">Select a form to open its responses</h2><p className="mt-2 text-sm leading-6 text-gray-500">Each form has its own questions, filters, hidden columns, and column order. Responses are never combined across forms.</p></div><div className="mt-7 grid gap-3 md:grid-cols-2 xl:grid-cols-3">{forms.map((form) => <button key={form.id} type="button" onClick={() => onSelect(String(form.id))} className="group rounded-xl border border-gray-200 bg-gray-50/60 p-4 text-left transition hover:-translate-y-0.5 hover:border-brand-300 hover:bg-white hover:shadow-md dark:border-gray-800 dark:bg-gray-900/50 dark:hover:border-brand-600 dark:hover:bg-gray-900"><div className="flex items-start gap-3"><span className="grid h-9 w-9 place-items-center rounded-lg bg-brand-50 text-brand-600 dark:bg-brand-500/10 dark:text-brand-300"><Icon name="grid" className="h-4 w-4" /></span><span className="min-w-0 flex-1"><span className="block truncate text-sm font-semibold text-gray-900 dark:text-white">{form.name}</span><span className="mt-1 block text-xs leading-5 text-gray-500">{form.submissionsCount ?? 0} submissions · {form.questions?.filter(isResponseColumn).length ?? 0} response fields</span></span><Icon name="chevron" className="mt-1 h-4 w-4 text-gray-400 transition group-hover:translate-x-0.5 group-hover:text-brand-500" /></div></button>)}</div>{forms.length === 0 && <div className="mt-8 rounded-xl border border-dashed border-gray-300 p-8 text-center text-sm text-gray-500 dark:border-gray-700">Create or import a form before opening the response workspace.</div>}</div>;
 }
 
 function ToolbarButton({ icon, label, active, disabled, onClick }: { icon: "filter" | "sort" | "fields" | "group"; label: string; active?: boolean; disabled?: boolean; onClick: () => void }) {
@@ -344,7 +404,7 @@ function StatusSelect({ value, disabled, onChange }: { value?: string; disabled?
   return <div className="relative inline-flex" onClick={(event) => event.stopPropagation()}><span className={`pointer-events-none absolute left-2 top-1/2 h-2 w-2 -translate-y-1/2 rounded-full ${config.dot}`} /><select value={normalizedStatus(value)} disabled={disabled} onChange={(event) => onChange(event.target.value)} aria-label="Response status" className={`h-7 max-w-32 appearance-none rounded-full border-0 py-1 pl-6 pr-6 text-[11px] font-semibold outline-none ring-1 ring-inset ring-black/5 ${config.badge}`}>{statuses.map((status) => <option key={status.id} value={status.id}>{status.label}</option>)}</select></div>;
 }
 
-function GridView({ responses, fields, visibleColumns, selectedIds, allSelected, groupByStatus, savingId, savingCell, onToggle, onToggleAll, onOpen, onStatus, onAnswer }: { responses: AdminResponse[]; fields: FieldColumn[]; visibleColumns: string[]; selectedIds: Array<string | number>; allSelected: boolean; groupByStatus: boolean; savingId: string | number | null; savingCell: string; onToggle: (id: string | number) => void; onToggleAll: () => void; onOpen: (response: AdminResponse) => void; onStatus: (response: AdminResponse, status: string) => void; onAnswer: (response: AdminResponse, field: FieldColumn, value: string) => void }) {
+function GridView({ responses, columns, primaryFields, selectedIds, allSelected, groupByStatus, savingId, savingCell, onToggle, onToggleAll, onOpen, onStatus, onAnswer, onMoveColumn }: { responses: AdminResponse[]; columns: FieldColumn[]; primaryFields: FieldColumn[]; selectedIds: Array<string | number>; allSelected: boolean; groupByStatus: boolean; savingId: string | number | null; savingCell: string; onToggle: (id: string | number) => void; onToggleAll: () => void; onOpen: (response: AdminResponse) => void; onStatus: (response: AdminResponse, status: string) => void; onAnswer: (response: AdminResponse, field: FieldColumn, value: string) => void; onMoveColumn: (draggedKey: string, targetKey: string) => void }) {
   if (responses.length === 0) return <EmptyState />;
   const grouped = groupByStatus ? statuses.map((status) => ({ status, items: responses.filter((response) => normalizedStatus(response.status) === status.id) })).filter((group) => group.items.length > 0) : [{ status: null, items: responses }];
   return <div className="max-h-[560px] overflow-auto">
@@ -353,28 +413,22 @@ function GridView({ responses, fields, visibleColumns, selectedIds, allSelected,
         <tr>
           <th className="sticky left-0 z-30 h-9 w-12 border-b border-r border-gray-200 bg-gray-50 px-3 dark:border-gray-800 dark:bg-gray-900"><input type="checkbox" checked={allSelected} onChange={onToggleAll} aria-label="Select all records" className="h-3.5 w-3.5 rounded border-gray-300 text-brand-600 focus:ring-brand-500" /></th>
           <th className="sticky left-12 z-30 min-w-56 border-b border-r border-gray-200 bg-gray-50 px-3 dark:border-gray-800 dark:bg-gray-900">Primary field</th>
-          {visibleColumns.includes("__form") && <th className="min-w-52 border-b border-r border-gray-200 px-3 dark:border-gray-800">Form</th>}
-          {visibleColumns.includes("__status") && <th className="min-w-36 border-b border-r border-gray-200 px-3 dark:border-gray-800">Status</th>}
-          {visibleColumns.includes("__submittedAt") && <th className="min-w-44 border-b border-r border-gray-200 px-3 dark:border-gray-800">Submitted</th>}
-          {fields.map((field) => <th key={field.key} className="min-w-52 max-w-72 border-b border-r border-gray-200 px-3 normal-case tracking-normal dark:border-gray-800"><span className="flex items-center gap-1.5"><span className="text-gray-400">A</span>{field.label}</span></th>)}
+          {columns.map((field) => <th key={field.key} draggable onDragStart={(event) => event.dataTransfer.setData("text/plain", field.key)} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { const draggedKey = event.dataTransfer.getData("text/plain"); if (draggedKey) onMoveColumn(draggedKey, field.key); }} title="Drag to reorder this column" className="min-w-52 max-w-72 cursor-grab border-b border-r border-gray-200 px-3 normal-case tracking-normal hover:bg-gray-100 active:cursor-grabbing dark:border-gray-800 dark:hover:bg-gray-800"><span className="flex items-center gap-1.5"><span className="text-gray-400">{field.type === "date" ? "◷" : field.type === "system" ? "◉" : "A"}</span>{field.label}<span className="ml-auto text-gray-300">⋮⋮</span></span></th>)}
         </tr>
       </thead>
-      <tbody>{grouped.map((group) => <GridGroup key={group.status?.id ?? "all"} group={group} fields={fields} visibleColumns={visibleColumns} selectedIds={selectedIds} savingId={savingId} savingCell={savingCell} onToggle={onToggle} onOpen={onOpen} onStatus={onStatus} onAnswer={onAnswer} />)}</tbody>
+      <tbody>{grouped.map((group) => <GridGroup key={group.status?.id ?? "all"} group={group} columns={columns} primaryFields={primaryFields} selectedIds={selectedIds} savingId={savingId} savingCell={savingCell} onToggle={onToggle} onOpen={onOpen} onStatus={onStatus} onAnswer={onAnswer} />)}</tbody>
     </table>
     <div className="sticky bottom-0 left-0 flex h-9 items-center border-t border-gray-200 bg-white/95 px-4 text-[11px] font-medium text-gray-500 backdrop-blur dark:border-gray-800 dark:bg-gray-950/95">{responses.length} records</div>
   </div>;
 }
 
-function GridGroup({ group, fields, visibleColumns, selectedIds, savingId, savingCell, onToggle, onOpen, onStatus, onAnswer }: { group: { status: typeof statuses[number] | null; items: AdminResponse[] }; fields: FieldColumn[]; visibleColumns: string[]; selectedIds: Array<string | number>; savingId: string | number | null; savingCell: string; onToggle: (id: string | number) => void; onOpen: (response: AdminResponse) => void; onStatus: (response: AdminResponse, status: string) => void; onAnswer: (response: AdminResponse, field: FieldColumn, value: string) => void }) {
+function GridGroup({ group, columns, primaryFields, selectedIds, savingId, savingCell, onToggle, onOpen, onStatus, onAnswer }: { group: { status: typeof statuses[number] | null; items: AdminResponse[] }; columns: FieldColumn[]; primaryFields: FieldColumn[]; selectedIds: Array<string | number>; savingId: string | number | null; savingCell: string; onToggle: (id: string | number) => void; onOpen: (response: AdminResponse) => void; onStatus: (response: AdminResponse, status: string) => void; onAnswer: (response: AdminResponse, field: FieldColumn, value: string) => void }) {
   return <>
-    {group.status && <tr><td colSpan={fields.length + 2 + systemFields.filter((field) => visibleColumns.includes(field.key)).length} className="border-b border-gray-200 bg-gray-50/90 px-4 py-2 font-semibold text-gray-700 dark:border-gray-800 dark:bg-gray-900/90 dark:text-gray-300"><span className={`mr-2 inline-block h-2 w-2 rounded-full ${group.status.dot}`} />{group.status.label}<span className="ml-2 font-normal text-gray-400">{group.items.length}</span></td></tr>}
+    {group.status && <tr><td colSpan={columns.length + 2} className="border-b border-gray-200 bg-gray-50/90 px-4 py-2 font-semibold text-gray-700 dark:border-gray-800 dark:bg-gray-900/90 dark:text-gray-300"><span className={`mr-2 inline-block h-2 w-2 rounded-full ${group.status.dot}`} />{group.status.label}<span className="ml-2 font-normal text-gray-400">{group.items.length}</span></td></tr>}
     {group.items.map((response) => <tr key={response.id} onClick={() => onOpen(response)} className="group cursor-pointer bg-white text-gray-700 hover:bg-brand-50/40 dark:bg-gray-950 dark:text-gray-300 dark:hover:bg-brand-500/[0.04]">
       <td className="sticky left-0 z-10 h-10 border-b border-r border-gray-200 bg-inherit px-3 dark:border-gray-800"><input type="checkbox" checked={selectedIds.includes(response.id)} onClick={(event) => event.stopPropagation()} onChange={() => onToggle(response.id)} aria-label={`Select response ${response.id}`} className="h-3.5 w-3.5 rounded border-gray-300 text-brand-600 focus:ring-brand-500" /></td>
-      <td className="sticky left-12 z-10 max-w-72 border-b border-r border-gray-200 bg-inherit px-3 font-medium text-gray-900 dark:border-gray-800 dark:text-white"><span className="flex items-center gap-2"><span className="text-[10px] tabular-nums text-gray-400">{response.id}</span><span className="truncate">{responseTitle(response, fields)}</span><Icon name="chevron" className="ml-auto h-3 w-3 opacity-0 transition group-hover:opacity-100" /></span></td>
-      {visibleColumns.includes("__form") && <td className="max-w-56 border-b border-r border-gray-200 px-3 dark:border-gray-800"><div className="truncate font-medium text-gray-600 dark:text-gray-300">{response.questionnaire?.name ?? "—"}</div></td>}
-      {visibleColumns.includes("__status") && <td className="border-b border-r border-gray-200 px-3 dark:border-gray-800"><StatusSelect value={response.status} disabled={savingId === response.id} onChange={(status) => onStatus(response, status)} /></td>}
-      {visibleColumns.includes("__submittedAt") && <td className="whitespace-nowrap border-b border-r border-gray-200 px-3 text-gray-500 dark:border-gray-800 dark:text-gray-400">{dateLabel(response.submittedAt)}</td>}
-      {fields.map((field) => <EditableCell key={field.key} response={response} field={field} saving={savingCell === `${response.id}:${field.key}`} onSave={(value) => onAnswer(response, field, value)} />)}
+      <td className="sticky left-12 z-10 max-w-72 border-b border-r border-gray-200 bg-inherit px-3 font-medium text-gray-900 dark:border-gray-800 dark:text-white"><span className="flex items-center gap-2"><span className="text-[10px] tabular-nums text-gray-400">{response.id}</span><span className="truncate">{responseTitle(response, primaryFields)}</span><Icon name="chevron" className="ml-auto h-3 w-3 opacity-0 transition group-hover:opacity-100" /></span></td>
+      {columns.map((field) => field.key === "__status" ? <td key={field.key} className="border-b border-r border-gray-200 px-3 dark:border-gray-800"><StatusSelect value={response.status} disabled={savingId === response.id} onChange={(status) => onStatus(response, status)} /></td> : field.key === "__submittedAt" ? <td key={field.key} className="whitespace-nowrap border-b border-r border-gray-200 px-3 text-gray-500 dark:border-gray-800 dark:text-gray-400">{dateLabel(response.submittedAt)}</td> : <EditableCell key={field.key} response={response} field={field} saving={savingCell === `${response.id}:${field.key}`} onSave={(value) => onAnswer(response, field, value)} />)}
     </tr>)}
   </>;
 }
