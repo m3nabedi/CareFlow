@@ -33,6 +33,7 @@ Route::middleware('auth:sanctum')->group(function (): void {
         Route::patch('/questionnaires/{questionnaire}/questions/{question}', [AdminClinicController::class, 'updateCurrentQuestion'])->name('admin.clinic.questionnaires.questions.update');
         Route::get('/questionnaires/{questionnaire}/responses', [AdminClinicController::class, 'currentResponses'])->name('admin.clinic.questionnaires.responses.index');
         Route::patch('/questionnaires/{questionnaire}/responses/{submission}', [AdminClinicController::class, 'updateCurrentResponse'])->name('admin.clinic.questionnaires.responses.update');
+        Route::patch('/questionnaires/{questionnaire}/responses/{submission}/answers/{questionKey}', [AdminClinicController::class, 'updateCurrentResponseAnswer'])->name('admin.clinic.questionnaires.responses.answers.update');
     });
 });
 

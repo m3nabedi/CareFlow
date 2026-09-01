@@ -27,4 +27,5 @@ export const clinicAdminApi = {
   responses: (id: string | number) => request<AdminResponse[]>(`/admin/clinic/questionnaires/${id}/responses?per_page=200`),
   allResponses: () => request<AdminResponse[]>("/admin/clinic/responses?per_page=200"),
   updateResponseStatus: (formId: string | number, responseId: string | number, status: string) => request<AdminResponse>(`/admin/clinic/questionnaires/${formId}/responses/${responseId}`, { method: "PATCH", body: JSON.stringify({ status }) }),
+  updateResponseAnswer: (formId: string | number, responseId: string | number, questionKey: string, value: unknown) => request<AdminResponse>(`/admin/clinic/questionnaires/${formId}/responses/${responseId}/answers/${encodeURIComponent(questionKey)}`, { method: "PATCH", body: JSON.stringify({ value }) }),
 };

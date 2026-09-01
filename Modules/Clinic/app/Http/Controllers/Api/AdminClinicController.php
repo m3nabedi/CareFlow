@@ -12,6 +12,7 @@ use Modules\Clinic\Http\Requests\CreateQuestionnaireRequest;
 use Modules\Clinic\Http\Requests\UpdateClinicRequest;
 use Modules\Clinic\Http\Requests\UpdateQuestionnaireRequest;
 use Modules\Clinic\Http\Requests\UpdateQuestionRequest;
+use Modules\Clinic\Http\Requests\UpdateSubmissionAnswerRequest;
 use Modules\Clinic\Http\Requests\UpdateSubmissionStatusRequest;
 use Modules\Clinic\Models\Clinic;
 use Modules\Clinic\Models\Question;
@@ -215,6 +216,31 @@ class AdminClinicController extends Controller
         );
 
         $submission->update($request->validated());
+
+        return response()->json([
+            'data' => $this->responseData($submission->fresh()->load(['answers', 'questionnaire:id,clinic_id,name,slug'])),
+        ]);
+    }
+
+    public function updateCurrentResponseAnswer(
+        UpdateSubmissionAnswerRequest $request,
+        Questionnaire $questionnaire,
+        Submission $submission,
+        string $questionKey,
+    ): JsonResponse {
+        $clinic = $this->currentClinic($request);
+        abort_unless(
+            $questionnaire->clinic_id === $clinic->id && $submission->questionnaire_id === $questionnaire->id,
+            404,
+        );
+
+        $question = $questionnaire->questions()->where('key', $questionKey)->firstOrFail();
+        $value = $request->validated('value');
+        $answer = $submission->answers()->firstOrNew(['question_key' => $questionKey]);
+        $answer->question()->associate($question);
+        $answer->value = ['value' => $value];
+        $answer->display_value = is_scalar($value) ? (string) $value : null;
+        $answer->save();
 
         return response()->json([
             'data' => $this->responseData($submission->fresh()->load(['answers', 'questionnaire:id,clinic_id,name,slug'])),
