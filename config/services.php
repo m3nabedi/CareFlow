@@ -35,4 +35,18 @@ return [
         ],
     ],
 
+    'google' => [
+        'client_id' => env('GOOGLE_CLIENT_ID'),
+        'client_secret' => env('GOOGLE_CLIENT_SECRET'),
+        'redirect' => env('GOOGLE_REDIRECT_URI'),
+        'success_redirect' => env('GOOGLE_OAUTH_SUCCESS_REDIRECT'),
+    ],
+
+    'sms' => [
+        'endpoint' => env('SMS_PROVIDER_ENDPOINT'),
+        'token' => env('SMS_PROVIDER_TOKEN'),
+        'from' => env('SMS_PROVIDER_FROM'),
+        'local_code' => env('AUTH_PHONE_LOCAL_CODE'),
+    ],
+
 ];

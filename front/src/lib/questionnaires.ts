@@ -146,6 +146,17 @@ export type Questionnaire = {
   } | null;
 };
 
+export type ResolvedClinic = {
+  id?: string | number;
+  name?: string;
+  slug: string;
+};
+
+export type ClinicSummary = ResolvedClinic & {
+  questionnairesCount?: number;
+  publicDomain?: string | null;
+};
+
 export type QuestionnaireConfirmation = {
   id?: string;
   title?: string | null;
@@ -191,6 +202,10 @@ export type QuestionnaireEvaluation = {
 };
 
 const apiBase = (process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api").replace(/\/$/, "");
+
+function clinicQuestionnairePath(clinicSlug: string, questionnaireSlug: string): string {
+  return `/clinics/${encodeURIComponent(clinicSlug)}/questionnaires/${encodeURIComponent(questionnaireSlug)}`;
+}
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const isMultipart = typeof FormData !== "undefined" && init?.body instanceof FormData;
@@ -244,12 +259,49 @@ function questionKeyForApi(question: Question): string {
   return String(question.key ?? question.id);
 }
 
+function resolvedClinicFrom(value: unknown): ResolvedClinic {
+  if (!value || typeof value !== "object" || !("slug" in value) || typeof value.slug !== "string" || value.slug.trim() === "") {
+    throw new QuestionnaireApiError("The clinic domain response is invalid.", {}, 502);
+  }
+
+  return {
+    id: "id" in value && (typeof value.id === "string" || typeof value.id === "number") ? value.id : undefined,
+    name: "name" in value && typeof value.name === "string" ? value.name : undefined,
+    slug: value.slug,
+  };
+}
+
+function clinicSummaryFrom(value: unknown): ClinicSummary {
+  const clinic = resolvedClinicFrom(value);
+
+  return {
+    ...clinic,
+    questionnairesCount: "questionnairesCount" in (value as object) && typeof (value as { questionnairesCount?: unknown }).questionnairesCount === "number"
+      ? (value as { questionnairesCount: number }).questionnairesCount
+      : undefined,
+    publicDomain: "publicDomain" in (value as object) && (typeof (value as { publicDomain?: unknown }).publicDomain === "string" || (value as { publicDomain?: unknown }).publicDomain === null)
+      ? (value as { publicDomain: string | null }).publicDomain
+      : undefined,
+  };
+}
+
 export const questionnaireApi = {
+  resolveClinicForDomain: (domain: string) =>
+    request<unknown>(`/public/clinics/resolve?domain=${encodeURIComponent(domain)}`).then(resolvedClinicFrom),
   list: (clinic?: string) => request<Questionnaire[]>(`/questionnaires${clinic ? `?filter[clinic]=${encodeURIComponent(clinic)}` : ""}`),
   get: (id: string) => request<Questionnaire>(`/questionnaires/${id}`).then(withExecutionSchema),
+  listForClinic: (clinicSlug: string) =>
+    request<Questionnaire[]>(`/clinics/${encodeURIComponent(clinicSlug)}/questionnaires`),
+  getForClinic: (clinicSlug: string, questionnaireSlug: string) =>
+    request<Questionnaire>(clinicQuestionnairePath(clinicSlug, questionnaireSlug)).then(withExecutionSchema),
   responses: (id: string) => request<Response[]>(`/questionnaires/${id}/responses`),
   evaluate: (id: string, answers: Record<string, unknown>) =>
     request<QuestionnaireEvaluation>(`/questionnaires/${id}/evaluate`, {
+      method: "POST",
+      body: JSON.stringify({ answers }),
+    }),
+  evaluateForClinic: (clinicSlug: string, questionnaireSlug: string, answers: Record<string, unknown>) =>
+    request<QuestionnaireEvaluation>(`${clinicQuestionnairePath(clinicSlug, questionnaireSlug)}/evaluate`, {
       method: "POST",
       body: JSON.stringify({ answers }),
     }),
@@ -267,4 +319,24 @@ export const questionnaireApi = {
 
     return request<Response>(`/questionnaires/${id}/responses`, { method: "POST", body: payload });
   },
+  submitForClinic: (clinicSlug: string, questionnaireSlug: string, answers: Record<string, unknown>, files: Record<string, File> = {}) => {
+    const path = `${clinicQuestionnairePath(clinicSlug, questionnaireSlug)}/responses`;
+    if (Object.keys(files).length === 0) {
+      return request<Response>(path, {
+        method: "POST",
+        body: JSON.stringify({ answers }),
+      });
+    }
+
+    const payload = new FormData();
+    payload.append("answers", JSON.stringify(answers));
+    Object.entries(files).forEach(([field, file]) => payload.append(`files[${field}]`, file));
+
+    return request<Response>(path, { method: "POST", body: payload });
+  },
+};
+
+export const clinicApi = {
+  listPublic: () => request<unknown[]>("/clinics").then((clinics) => clinics.map(clinicSummaryFrom)),
+  getPublic: (clinicSlug: string) => request<unknown>(`/clinics/${encodeURIComponent(clinicSlug)}`).then(clinicSummaryFrom),
 };

@@ -22,6 +22,7 @@ class ClinicFactory extends Factory
         return [
             'name' => fake()->company(),
             'slug' => fake()->unique()->slug(2),
+            'public_domain' => null,
             'settings' => [],
             'branding' => [],
         ];

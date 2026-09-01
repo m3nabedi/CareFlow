@@ -16,7 +16,7 @@ class Clinic extends Model
     /** @use HasFactory<ClinicFactory> */
     use HasFactory;
 
-    protected $fillable = ['name', 'slug', 'settings', 'branding'];
+    protected $fillable = ['name', 'slug', 'public_domain', 'settings', 'branding'];
 
     protected function casts(): array
     {
@@ -45,7 +45,7 @@ class Clinic extends Model
 
     public function users(): BelongsToMany
     {
-        return $this->belongsToMany(User::class)->withTimestamps();
+        return $this->belongsToMany(User::class)->withPivot('role')->withTimestamps();
     }
 
     /** @return array<string, mixed> */

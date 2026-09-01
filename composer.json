@@ -28,6 +28,7 @@
     "autoload": {
         "psr-4": {
             "App\\": "app/",
+            "Modules\\Admin\\": "Modules/Admin/app/",
             "Modules\\Clinic\\": "Modules/Clinic/app/",
             "Database\\Factories\\": "database/factories/",
             "Database\\Seeders\\": "database/seeders/"
@@ -35,6 +36,7 @@
     },
     "autoload-dev": {
         "psr-4": {
+            "Modules\\Admin\\Tests\\": "Modules/Admin/tests/",
             "Modules\\Clinic\\Database\\Factories\\": "Modules/Clinic/database/factories/",
             "Modules\\Clinic\\Tests\\": "Modules/Clinic/tests/",
             "Tests\\": "tests/"

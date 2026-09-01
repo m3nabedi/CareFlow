@@ -183,7 +183,7 @@ function RichContent({ html, tone = "info", title }: { html: string; tone?: Cont
   );
 }
 
-export default function QuestionnaireForm({ questionnaire }: { questionnaire: Questionnaire }) {
+export default function QuestionnaireForm({ questionnaire, clinicSlug }: { questionnaire: Questionnaire; clinicSlug?: string }) {
   const questions = useMemo(() => questionnaire.questions ?? [], [questionnaire.questions]);
   const steps = useMemo(() => {
     const executionSteps = questionnaire.execution?.steps;
@@ -203,6 +203,7 @@ export default function QuestionnaireForm({ questionnaire }: { questionnaire: Qu
   const [evaluation, setEvaluation] = useState<QuestionnaireEvaluation | null>(null);
   const [evaluationStatus, setEvaluationStatus] = useState<"idle" | "loading" | "success" | "error">("idle");
   const formTop = useRef<HTMLDivElement>(null);
+  const scopedQuestionnaireSlug = clinicSlug && questionnaire.slug ? questionnaire.slug : null;
   const wpSettings = questionnaire.settings?.wpforms_settings;
   const rules = useMemo(() => wpSettings?.mcp_frontend_rules ?? questionnaire.execution?.gates?.map((gate) => ({
     key: gate.key,
@@ -269,7 +270,9 @@ export default function QuestionnaireForm({ questionnaire }: { questionnaire: Qu
     let active = true;
     setEvaluationStatus("loading");
     const timeout = window.setTimeout(() => {
-      questionnaireApi.evaluate(String(questionnaire.id), formAnswers)
+      (clinicSlug && scopedQuestionnaireSlug
+        ? questionnaireApi.evaluateForClinic(clinicSlug, scopedQuestionnaireSlug, formAnswers)
+        : questionnaireApi.evaluate(String(questionnaire.id), formAnswers))
         .then((result) => {
           if (!active) return;
           setEvaluation(result);
@@ -284,7 +287,7 @@ export default function QuestionnaireForm({ questionnaire }: { questionnaire: Qu
       active = false;
       window.clearTimeout(timeout);
     };
-  }, [formAnswers, questionnaire.id, questionnaire.slug]);
+  }, [clinicSlug, formAnswers, questionnaire.id, questionnaire.slug, scopedQuestionnaireSlug]);
 
   const update = (question: Question, value: unknown): void => {
     const key = questionKey(question);
@@ -501,7 +504,9 @@ export default function QuestionnaireForm({ questionnaire }: { questionnaire: Qu
           submissionAnswers[key] = { value: String(formAnswers[key] ?? ""), confirmation: confirmations[key] ?? "" };
         }
       });
-      const result = await questionnaireApi.submit(String(questionnaire.id), submissionAnswers, files);
+      const result = await (clinicSlug && scopedQuestionnaireSlug
+        ? questionnaireApi.submitForClinic(clinicSlug, scopedQuestionnaireSlug, submissionAnswers, files)
+        : questionnaireApi.submit(String(questionnaire.id), submissionAnswers, files));
       setSubmissionConfirmation(result.confirmation ?? questionnaire.execution?.completion?.confirmation ?? null);
       setSubmitted(true); setMessage("Your response has been submitted successfully.");
       requestAnimationFrame(() => formTop.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
