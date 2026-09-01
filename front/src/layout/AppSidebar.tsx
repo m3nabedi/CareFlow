@@ -6,7 +6,6 @@ import { usePathname } from "next/navigation";
 import { useSidebar } from "../context/SidebarContext";
 import {
   BoxCubeIcon,
-  CalenderIcon,
   ChevronDownIcon,
   GridIcon,
   HorizontaLDots,
@@ -29,7 +28,7 @@ type NavItem = {
 const navItems: NavItem[] = [
   {
     icon: <GridIcon />,
-    name: "پرسشنامه‌ها",
+    name: "Questionnaires",
     path: "/",
   },
   {
@@ -232,30 +231,24 @@ const AppSidebar: React.FC = () => {
    const isActive = useCallback((path: string) => path === pathname, [pathname]);
 
   useEffect(() => {
-    // Check if the current path matches any submenu item
-    let submenuMatched = false;
+    let matchingSubmenu: { type: "main" | "others"; index: number } | null = null;
+
     ["main", "others"].forEach((menuType) => {
       const items = menuType === "main" ? navItems : othersItems;
       items.forEach((nav, index) => {
-        if (nav.subItems) {
-          nav.subItems.forEach((subItem) => {
-            if (isActive(subItem.path)) {
-              setOpenSubmenu({
-                type: menuType as "main" | "others",
-                index,
-              });
-              submenuMatched = true;
-            }
-          });
+        if (nav.subItems?.some((subItem) => isActive(subItem.path))) {
+          matchingSubmenu = {
+            type: menuType as "main" | "others",
+            index,
+          };
         }
       });
     });
 
-    // If no submenu item matches, close the open submenu
-    if (!submenuMatched) {
-      setOpenSubmenu(null);
-    }
-  }, [pathname,isActive]);
+    const frame = window.requestAnimationFrame(() => setOpenSubmenu(matchingSubmenu));
+
+    return () => window.cancelAnimationFrame(frame);
+  }, [pathname, isActive]);
 
   useEffect(() => {
     // Set the height of the submenu items when the submenu is opened

@@ -12,6 +12,8 @@ package-lock.json
 /.claude
 /.junie
 /.mcp.json
+/front/AGENTS.md
+/front/CLAUDE.md
 /.cursor/
 /.idea
 /.nova

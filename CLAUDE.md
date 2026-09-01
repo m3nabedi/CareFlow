@@ -3,6 +3,13 @@
 
 # Laravel Boost Guidelines
 
+## Product Locale
+
+- CareFlow's repository language is English. All user-facing copy, API messages, seed data, source comments, tests, and documentation must be written in English only.
+- Clinics may operate in any country. Locale, timezone, phone-country options, and other regional behaviour must come from each clinic's configuration and must never be hard-coded from the project's repository language.
+- Store timestamps in UTC and apply a clinic's configured timezone only when presenting local dates and times.
+- Never introduce Persian or other right-to-left copy into the repository unless the product requirements are explicitly changed.
+
 The Laravel Boost guidelines are specifically curated by Laravel maintainers for this application. These guidelines should be followed closely to ensure the best experience when building Laravel applications.
 
 ## Foundational Context

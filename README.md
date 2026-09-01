@@ -1,58 +1,159 @@
-<p align="center"><a href="https://laravel.com" target="_blank"><img src="https://raw.githubusercontent.com/laravel/art/master/logo-lockup/5%20SVG/2%20CMYK/1%20Full%20Color/laravel-logolockup-cmyk-red.svg" width="400" alt="Laravel Logo"></a></p>
+# CareFlow
 
-<p align="center">
-<a href="https://github.com/laravel/framework/actions"><img src="https://github.com/laravel/framework/workflows/tests/badge.svg" alt="Build Status"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/dt/laravel/framework" alt="Total Downloads"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/v/laravel/framework" alt="Latest Stable Version"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/l/laravel/framework" alt="License"></a>
-</p>
+CareFlow is a clinic-scoped questionnaire and intake platform. It imports complex WPForms exports, executes multi-step form rules, stores responses and private documents by clinic, and presents questionnaire data through a Next.js dashboard.
 
-## About Laravel
+## Product rules
 
-Laravel is a web application framework with expressive, elegant syntax. We believe development must be an enjoyable and creative experience to be truly fulfilling. Laravel takes the pain out of development by easing common tasks used in many web projects, such as:
+- Repository content, UI copy, API messages, tests, and documentation are English-only.
+- Clinics may operate in any country. Regional behaviour is configured per clinic, never hard-coded globally.
+- Timestamps are stored in UTC. Clinic timezone and locale settings control presentation.
+- Questionnaire submissions are isolated by clinic. Response lists and future document-download endpoints require Sanctum authentication and clinic membership.
 
-- [Simple, fast routing engine](https://laravel.com/docs/routing).
-- [Powerful dependency injection container](https://laravel.com/docs/container).
-- Multiple back-ends for [session](https://laravel.com/docs/session) and [cache](https://laravel.com/docs/cache) storage.
-- Expressive, intuitive [database ORM](https://laravel.com/docs/eloquent).
-- Database agnostic [schema migrations](https://laravel.com/docs/migrations).
-- [Robust background job processing](https://laravel.com/docs/queues).
-- [Real-time event broadcasting](https://laravel.com/docs/broadcasting).
+## Architecture
 
-Laravel is accessible, powerful, and provides tools required for large, robust applications.
+The Laravel application is the API and workflow authority. The domain is owned by the Nwidart `Clinic` module:
 
-## Learning Laravel
-
-Laravel has the most extensive and thorough [documentation](https://laravel.com/docs) and video tutorial library of all modern web application frameworks, making it a breeze to get started with the framework.
-
-In addition, [Laracasts](https://laracasts.com) contains thousands of video tutorials on a range of topics including Laravel, modern PHP, unit testing, and JavaScript. Boost your skills by digging into our comprehensive video library.
-
-You can also watch bite-sized lessons with real-world projects on [Laravel Learn](https://laravel.com/learn), where you will be guided through building a Laravel application from scratch while learning PHP fundamentals.
-
-## Agentic Development
-
-Laravel's predictable structure and conventions make it ideal for AI coding agents like Claude Code, Cursor, and GitHub Copilot. Install [Laravel Boost](https://laravel.com/docs/ai) to supercharge your AI workflow:
-
-```bash
-composer require laravel/boost --dev
-
-php artisan boost:install
+```text
+Modules/Clinic/
+├── app/
+│   ├── Console/Commands/ImportWpForms.php
+│   ├── Http/Controllers/Api/
+│   ├── Http/Requests/
+│   ├── Http/Resources/
+│   ├── Models/
+│   └── Services/
+├── database/
+│   ├── factories/
+│   └── migrations/
+├── routes/api.php
+└── tests/Feature/
 ```
 
-Boost provides your agent 15+ tools and skills that help agents build Laravel applications while following best practices.
+The Next.js 16 / TailAdmin application lives in `front/`. It consumes the executable schema returned by Laravel and renders page breaks, layouts, conditions, gates, compound inputs, uploads, date pickers, and doctor recommendations.
 
-## Contributing
+## Data model
 
-Thank you for considering contributing to the Laravel framework! The contribution guide can be found in the [Laravel documentation](https://laravel.com/docs/contributions).
+- `clinics`: ownership, branding, locale, timezone, default calling code, and allowed calling codes.
+- `clinic_user`: authenticated clinic membership.
+- `questionnaires`: clinic-owned form definitions and source metadata.
+- `questions`: ordered dynamic fields, source settings, choices, validation, and conditional rules.
+- `submissions`: one completed questionnaire response.
+- `answers`: values and safe attachment metadata keyed by question.
 
-## Code of Conduct
+Uploaded files use Laravel's private local disk and a server-generated path:
 
-In order to ensure that the Laravel community is welcoming to all, please review and abide by the [Code of Conduct](https://laravel.com/docs/contributions#code-of-conduct).
+```text
+clinics/clinic-{clinic_id}/submissions/{submission_uuid}/question-{question_id}/{random_filename}
+```
 
-## Security Vulnerabilities
+User-controlled names are never used as storage directories. Public response payloads omit the disk and internal storage path.
 
-If you discover a security vulnerability within Laravel, please send an e-mail to Taylor Otwell via [taylor@laravel.com](mailto:taylor@laravel.com). All security vulnerabilities will be promptly addressed.
+## Executable questionnaires
 
-## License
+`FormSchemaService` converts imported definitions into a versioned execution schema with:
 
-The Laravel framework is open-sourced software licensed under the [MIT license](https://opensource.org/licenses/MIT).
+- ordered steps and navigation;
+- content and column layouts;
+- canonical choice identifiers;
+- normalized visibility conditions;
+- page eligibility gates;
+- typed, allowlisted calculations;
+- upload policies and completion workflows.
+
+`FormRuntimeService` is authoritative for visibility, gates, derived age values, and clinician eligibility. Exported PHP or JavaScript formulas are never evaluated.
+
+The imported `appointment-form-main-by-imi-v2` form includes its three-step flow, urgent-care gates, conditional referral upload, age calculation, and single or multiple psychiatrist recommendations.
+
+After a successful submission, CareFlow resolves that questionnaire's own WPForms confirmation. Conditional adult/child confirmations are selected server-side, field placeholders are escaped and interpolated from trusted answers, and confirmation HTML and links are allowlisted before the frontend renders them.
+
+## Clinic regional settings
+
+Regional values are stored in the clinic `settings` JSON. The default calling code must be present in the allowed list.
+
+```json
+{
+  "locale": "en",
+  "timezone": "Europe/Paris",
+  "default_calling_code": "+33",
+  "allowed_calling_codes": [
+    {
+      "country": "France",
+      "iso": "FR",
+      "label": "France (+33)",
+      "callingCode": "+33"
+    }
+  ]
+}
+```
+
+## API
+
+Public questionnaire discovery, evaluation, and submission:
+
+```text
+GET  /api/clinics
+GET  /api/clinics/{clinic}/questionnaires
+GET  /api/clinics/{clinic}/questionnaires/{questionnaire}
+POST /api/clinics/{clinic}/questionnaires/{questionnaire}/evaluate
+POST /api/clinics/{clinic}/questionnaires/{questionnaire}/responses
+```
+
+Compatibility routes also exist under `/api/questionnaires`. Response listing routes require `auth:sanctum` and clinic membership.
+
+Multipart submissions send answers as a JSON string and files by field key:
+
+```text
+answers={"wpforms_47":"Example"}
+files[wpforms_7]=referral.pdf
+```
+
+## MCP
+
+CareFlow uses Laravel's official `laravel/mcp` package. The authenticated web endpoint is:
+
+```text
+/mcp/questionnaires
+```
+
+The server can list questionnaires and create clinic-owned draft questionnaires. Drafts remain unpublished until reviewed.
+
+## Local setup
+
+Backend:
+
+```bash
+composer install
+cp .env.example .env
+php artisan key:generate
+php artisan migrate
+php artisan serve
+```
+
+Frontend:
+
+```bash
+cd front
+npm install
+npm run dev
+```
+
+Set MySQL connection values in the uncommitted `.env`. Lock files and environment files are intentionally excluded from this repository.
+
+Import a WPForms export into a clinic:
+
+```bash
+php artisan forms:import-wpforms /absolute/path/to/export.json \
+  --clinic=empowered-minds-clinic \
+  --replace
+```
+
+## Verification
+
+```bash
+php artisan test --compact
+vendor/bin/pint --dirty --format agent
+cd front && npm run build
+cd front && npm run lint
+composer audit
+cd front && npm audit --omit=dev
+```

@@ -2,7 +2,6 @@
 
 namespace App\Mcp\Tools;
 
-use App\Models\Questionnaire;
 use Illuminate\Contracts\JsonSchema\JsonSchema;
 use Illuminate\JsonSchema\Types\Type;
 use Illuminate\Support\Str;
@@ -11,6 +10,7 @@ use Laravel\Mcp\Response;
 use Laravel\Mcp\Server\Attributes\Description;
 use Laravel\Mcp\Server\Tool;
 use Laravel\Mcp\Server\Tools\Annotations\IsDestructive;
+use Modules\Clinic\Models\Clinic;
 
 #[Description('Create a draft CareFlow questionnaire with dynamic fields. The result must be reviewed and published in the application before it is shown to respondents.')]
 #[IsDestructive]
@@ -22,6 +22,7 @@ class CreateQuestionnaire extends Tool
     public function handle(Request $request): Response
     {
         $data = $request->validate([
+            'clinic_slug' => ['required', 'string', 'exists:clinics,slug'],
             'name' => ['required', 'string', 'max:255'],
             'description' => ['nullable', 'string'],
             'questions' => ['required', 'array', 'min:1'],
@@ -34,7 +35,8 @@ class CreateQuestionnaire extends Tool
             'questions.*.placeholder' => ['nullable', 'string'],
         ]);
 
-        $questionnaire = Questionnaire::create([
+        $clinic = Clinic::query()->where('slug', $data['clinic_slug'])->firstOrFail();
+        $questionnaire = $clinic->questionnaires()->create([
             'name' => $data['name'],
             'slug' => Str::slug($data['name']).'-'.Str::lower(Str::random(6)),
             'description' => $data['description'] ?? null,
@@ -74,6 +76,7 @@ class CreateQuestionnaire extends Tool
     public function schema(JsonSchema $schema): array
     {
         return [
+            'clinic_slug' => $schema->string()->description('Existing clinic slug that will own the questionnaire.')->required(),
             'name' => $schema->string()->description('Questionnaire title.')->required(),
             'description' => $schema->string()->description('Optional explanation shown to respondents.')->nullable(),
             'questions' => $schema->array()

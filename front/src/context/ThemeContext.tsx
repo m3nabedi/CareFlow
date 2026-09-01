@@ -19,12 +19,19 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({
   const [isInitialized, setIsInitialized] = useState(false);
 
   useEffect(() => {
-    // This code will only run on the client side
     const savedTheme = localStorage.getItem("theme") as Theme | null;
-    const initialTheme = savedTheme || "light"; // Default to light theme
+    const initialTheme = savedTheme || "light";
+    let active = true;
 
-    setTheme(initialTheme);
-    setIsInitialized(true);
+    queueMicrotask(() => {
+      if (!active) return;
+      setTheme(initialTheme);
+      setIsInitialized(true);
+    });
+
+    return () => {
+      active = false;
+    };
   }, []);
 
   useEffect(() => {
