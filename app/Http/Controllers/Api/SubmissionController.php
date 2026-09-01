@@ -93,6 +93,8 @@ class SubmissionController extends Controller
             'metadata' => $submission->metadata,
             'submittedAt' => $submission->submitted_at?->toISOString(),
             'createdAt' => $submission->created_at?->toISOString(),
+            'submitted_at' => $submission->submitted_at?->toISOString(),
+            'created_at' => $submission->created_at?->toISOString(),
             'answers' => $submission->answers->mapWithKeys(fn ($answer): array => [$answer->question_key => $answer->value['value'] ?? null])->all(),
         ];
     }
