@@ -266,7 +266,7 @@ export default function ClinicResponses() {
     const workspace = responseWorkspaceLayout(selectedForm);
     setSavingWorkspace(true);
     try {
-      const updated = await clinicAdminApi.updateResponseWorkspace(selectedForm.id, {
+      await clinicAdminApi.updateResponseWorkspace(selectedForm.id, {
         ...existingLayout,
         response_workspace: {
           ...workspace,
@@ -274,7 +274,6 @@ export default function ClinicResponses() {
           hiddenColumns: availableColumns.filter((key) => !nextVisibleFields.includes(key)),
         },
       });
-      setForms((items) => items.map((form) => form.id === updated.id ? updated : form));
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "We could not save this table layout.");
     } finally { setSavingWorkspace(false); }
@@ -405,15 +404,51 @@ function StatusSelect({ value, disabled, onChange }: { value?: string; disabled?
 }
 
 function GridView({ responses, columns, primaryFields, selectedIds, allSelected, groupByStatus, savingId, savingCell, onToggle, onToggleAll, onOpen, onStatus, onAnswer, onMoveColumn }: { responses: AdminResponse[]; columns: FieldColumn[]; primaryFields: FieldColumn[]; selectedIds: Array<string | number>; allSelected: boolean; groupByStatus: boolean; savingId: string | number | null; savingCell: string; onToggle: (id: string | number) => void; onToggleAll: () => void; onOpen: (response: AdminResponse) => void; onStatus: (response: AdminResponse, status: string) => void; onAnswer: (response: AdminResponse, field: FieldColumn, value: string) => void; onMoveColumn: (draggedKey: string, targetKey: string) => void }) {
+  const [draggedColumn, setDraggedColumn] = useState("");
+  const [dragOverColumn, setDragOverColumn] = useState("");
   if (responses.length === 0) return <EmptyState />;
   const grouped = groupByStatus ? statuses.map((status) => ({ status, items: responses.filter((response) => normalizedStatus(response.status) === status.id) })).filter((group) => group.items.length > 0) : [{ status: null, items: responses }];
+  const draggedIndex = columns.findIndex((field) => field.key === draggedColumn);
+  const dragOverIndex = columns.findIndex((field) => field.key === dragOverColumn);
+  const clearColumnDrag = () => { setDraggedColumn(""); setDragOverColumn(""); };
   return <div className="max-h-[560px] overflow-auto">
     <table className="min-w-max border-separate border-spacing-0 text-left text-xs">
       <thead className="sticky top-0 z-20 bg-gray-50 text-[10px] font-semibold uppercase tracking-wide text-gray-500 dark:bg-gray-900 dark:text-gray-400">
         <tr>
           <th className="sticky left-0 z-30 h-9 w-12 border-b border-r border-gray-200 bg-gray-50 px-3 dark:border-gray-800 dark:bg-gray-900"><input type="checkbox" checked={allSelected} onChange={onToggleAll} aria-label="Select all records" className="h-3.5 w-3.5 rounded border-gray-300 text-brand-600 focus:ring-brand-500" /></th>
           <th className="sticky left-12 z-30 min-w-56 border-b border-r border-gray-200 bg-gray-50 px-3 dark:border-gray-800 dark:bg-gray-900">Primary field</th>
-          {columns.map((field) => <th key={field.key} draggable onDragStart={(event) => event.dataTransfer.setData("text/plain", field.key)} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { const draggedKey = event.dataTransfer.getData("text/plain"); if (draggedKey) onMoveColumn(draggedKey, field.key); }} title="Drag to reorder this column" className="min-w-52 max-w-72 cursor-grab border-b border-r border-gray-200 px-3 normal-case tracking-normal hover:bg-gray-100 active:cursor-grabbing dark:border-gray-800 dark:hover:bg-gray-800"><span className="flex items-center gap-1.5"><span className="text-gray-400">{field.type === "date" ? "◷" : field.type === "system" ? "◉" : "A"}</span>{field.label}<span className="ml-auto text-gray-300">⋮⋮</span></span></th>)}
+          {columns.map((field) => {
+            const isDragged = draggedColumn === field.key;
+            const isTarget = dragOverColumn === field.key && draggedColumn !== field.key;
+            const markerSide = draggedIndex < dragOverIndex ? "right-0" : "left-0";
+            return <th
+              key={field.key}
+              draggable
+              onDragStart={(event) => {
+                event.dataTransfer.effectAllowed = "move";
+                event.dataTransfer.setData("text/plain", field.key);
+                setDraggedColumn(field.key);
+              }}
+              onDragEnter={() => setDragOverColumn(field.key)}
+              onDragOver={(event) => {
+                event.preventDefault();
+                event.dataTransfer.dropEffect = "move";
+                if (dragOverColumn !== field.key) setDragOverColumn(field.key);
+              }}
+              onDragEnd={clearColumnDrag}
+              onDrop={(event) => {
+                event.preventDefault();
+                const draggedKey = event.dataTransfer.getData("text/plain");
+                if (draggedKey) onMoveColumn(draggedKey, field.key);
+                clearColumnDrag();
+              }}
+              title="Drag to reorder this column"
+              className={`relative min-w-52 max-w-72 cursor-grab select-none border-b border-r border-gray-200 px-3 normal-case tracking-normal transition-[background-color,box-shadow,opacity,transform] duration-150 ease-out active:cursor-grabbing dark:border-gray-800 ${isDragged ? "scale-[0.985] bg-brand-50/80 opacity-60 shadow-inner dark:bg-brand-500/10" : isTarget ? "bg-brand-50 shadow-[inset_0_0_0_1px_rgb(70_95_255_/_0.18)] dark:bg-brand-500/10" : "hover:bg-gray-100 dark:hover:bg-gray-800"}`}
+            >
+              {isTarget && <span className={`pointer-events-none absolute inset-y-0 ${markerSide} z-10 w-0.5 rounded-full bg-brand-500 shadow-[0_0_0_2px_rgb(70_95_255_/_0.12)]`} />}
+              <span className="flex items-center gap-1.5"><span className="text-gray-400">{field.type === "date" ? "◷" : field.type === "system" ? "◉" : "A"}</span><span className="truncate">{field.label}</span><span className={`ml-auto text-gray-300 transition-all duration-150 ${isDragged ? "scale-110 text-brand-500" : ""}`}>⋮⋮</span></span>
+            </th>;
+          })}
         </tr>
       </thead>
       <tbody>{grouped.map((group) => <GridGroup key={group.status?.id ?? "all"} group={group} columns={columns} primaryFields={primaryFields} selectedIds={selectedIds} savingId={savingId} savingCell={savingCell} onToggle={onToggle} onOpen={onOpen} onStatus={onStatus} onAnswer={onAnswer} />)}</tbody>
