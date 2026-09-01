@@ -4,8 +4,10 @@ namespace Tests\Feature;
 
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Modules\Clinic\Models\Answer;
 use Modules\Clinic\Models\Clinic;
 use Modules\Clinic\Models\Questionnaire;
+use Modules\Clinic\Models\Submission;
 use Tests\TestCase;
 
 class ClinicAdminAuthenticationTest extends TestCase
@@ -123,5 +125,102 @@ class ClinicAdminAuthenticationTest extends TestCase
 
         $this->get('/api/auth/google/redirect')
             ->assertServiceUnavailable();
+    }
+
+    public function test_clinic_admin_can_update_the_status_of_their_submission(): void
+    {
+        $user = User::factory()->create();
+        $clinic = Clinic::factory()->create();
+        $clinic->users()->attach($user, ['role' => 'admin']);
+        $questionnaire = Questionnaire::factory()->for($clinic)->create();
+        $submission = Submission::factory()->for($questionnaire)->create(['status' => 'submitted']);
+        $token = $user->createToken('test', ['clinic:admin'])->plainTextToken;
+
+        $response = $this->withToken($token)->patchJson(
+            "/api/admin/clinic/questionnaires/{$questionnaire->id}/responses/{$submission->id}",
+            ['status' => 'follow_up'],
+        );
+
+        $response->assertOk()->assertJsonPath('data.status', 'follow_up');
+        $this->assertDatabaseHas('submissions', [
+            'id' => $submission->id,
+            'status' => 'follow_up',
+        ]);
+    }
+
+    public function test_clinic_admin_cannot_update_another_clinics_submission(): void
+    {
+        $user = User::factory()->create();
+        $clinic = Clinic::factory()->create();
+        $otherClinic = Clinic::factory()->create();
+        $clinic->users()->attach($user, ['role' => 'admin']);
+        $questionnaire = Questionnaire::factory()->for($clinic)->create();
+        $otherQuestionnaire = Questionnaire::factory()->for($otherClinic)->create();
+        $otherSubmission = Submission::factory()->for($otherQuestionnaire)->create(['status' => 'submitted']);
+        $token = $user->createToken('test', ['clinic:admin'])->plainTextToken;
+
+        $response = $this->withToken($token)->patchJson(
+            "/api/admin/clinic/questionnaires/{$questionnaire->id}/responses/{$otherSubmission->id}",
+            ['status' => 'archived'],
+        );
+
+        $response->assertNotFound();
+        $this->assertDatabaseHas('submissions', [
+            'id' => $otherSubmission->id,
+            'status' => 'submitted',
+        ]);
+    }
+
+    public function test_unified_responses_only_returns_the_current_clinics_submissions_with_questionnaire_metadata(): void
+    {
+        $user = User::factory()->create();
+        $clinic = Clinic::factory()->create();
+        $otherClinic = Clinic::factory()->create();
+        $clinic->users()->attach($user, ['role' => 'admin']);
+        $firstQuestionnaire = Questionnaire::factory()->for($clinic)->create(['name' => 'First intake']);
+        $secondQuestionnaire = Questionnaire::factory()->for($clinic)->create(['name' => 'Second intake']);
+        $otherQuestionnaire = Questionnaire::factory()->for($otherClinic)->create();
+        $firstSubmission = Submission::factory()->for($firstQuestionnaire)->create(['submitted_at' => now()->subHour()]);
+        $secondSubmission = Submission::factory()->for($secondQuestionnaire)->create(['submitted_at' => now()]);
+        $otherSubmission = Submission::factory()->for($otherQuestionnaire)->create(['submitted_at' => now()->addHour()]);
+        Answer::factory()->for($secondSubmission)->create(['question_key' => 'patient_name', 'value' => ['value' => 'Ada Lovelace']]);
+        $token = $user->createToken('test', ['clinic:admin'])->plainTextToken;
+
+        $response = $this->withToken($token)->getJson('/api/admin/clinic/responses?per_page=999');
+
+        $response->assertOk()
+            ->assertJsonCount(2, 'data')
+            ->assertJsonPath('meta.per_page', 200)
+            ->assertJsonPath('meta.total', 2)
+            ->assertJsonPath('data.0.id', $secondSubmission->id)
+            ->assertJsonPath('data.0.questionnaire.id', $secondQuestionnaire->id)
+            ->assertJsonPath('data.0.questionnaire.name', 'Second intake')
+            ->assertJsonPath('data.0.answers.patient_name', 'Ada Lovelace')
+            ->assertJsonPath('data.1.id', $firstSubmission->id)
+            ->assertJsonMissing(['id' => $otherSubmission->id]);
+
+        $this->withToken($token)->getJson("/api/admin/clinic/questionnaires/{$firstQuestionnaire->id}/responses?per_page=999")
+            ->assertOk()
+            ->assertJsonCount(1, 'data')
+            ->assertJsonPath('data.0.id', $firstSubmission->id)
+            ->assertJsonPath('meta.per_page', 200);
+    }
+
+    public function test_submission_status_must_be_a_supported_workflow_status(): void
+    {
+        $user = User::factory()->create();
+        $clinic = Clinic::factory()->create();
+        $clinic->users()->attach($user, ['role' => 'admin']);
+        $questionnaire = Questionnaire::factory()->for($clinic)->create();
+        $submission = Submission::factory()->for($questionnaire)->create(['status' => 'submitted']);
+        $token = $user->createToken('test', ['clinic:admin'])->plainTextToken;
+
+        $this->withToken($token)->patchJson(
+            "/api/admin/clinic/questionnaires/{$questionnaire->id}/responses/{$submission->id}",
+            ['status' => 'invalid-status'],
+        )
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors('status');
+        $this->assertDatabaseHas('submissions', ['id' => $submission->id, 'status' => 'submitted']);
     }
 }

@@ -27,10 +27,12 @@ Route::middleware('auth:sanctum')->group(function (): void {
         Route::patch('/', [AdminClinicController::class, 'updateCurrent'])->name('admin.clinic.update');
         Route::get('/questionnaires', [AdminClinicController::class, 'currentQuestionnaires'])->name('admin.clinic.questionnaires.index');
         Route::post('/questionnaires', [AdminClinicController::class, 'createCurrentQuestionnaire'])->name('admin.clinic.questionnaires.store');
+        Route::get('/responses', [AdminClinicController::class, 'currentAllResponses'])->name('admin.clinic.responses.index');
         Route::get('/questionnaires/{questionnaire}', [AdminClinicController::class, 'currentQuestionnaire'])->name('admin.clinic.questionnaires.show');
         Route::patch('/questionnaires/{questionnaire}', [AdminClinicController::class, 'updateCurrentQuestionnaire'])->name('admin.clinic.questionnaires.update');
         Route::patch('/questionnaires/{questionnaire}/questions/{question}', [AdminClinicController::class, 'updateCurrentQuestion'])->name('admin.clinic.questionnaires.questions.update');
         Route::get('/questionnaires/{questionnaire}/responses', [AdminClinicController::class, 'currentResponses'])->name('admin.clinic.questionnaires.responses.index');
+        Route::patch('/questionnaires/{questionnaire}/responses/{submission}', [AdminClinicController::class, 'updateCurrentResponse'])->name('admin.clinic.questionnaires.responses.update');
     });
 });
 

@@ -12,6 +12,7 @@ use Modules\Clinic\Http\Requests\CreateQuestionnaireRequest;
 use Modules\Clinic\Http\Requests\UpdateClinicRequest;
 use Modules\Clinic\Http\Requests\UpdateQuestionnaireRequest;
 use Modules\Clinic\Http\Requests\UpdateQuestionRequest;
+use Modules\Clinic\Http\Requests\UpdateSubmissionStatusRequest;
 use Modules\Clinic\Models\Clinic;
 use Modules\Clinic\Models\Question;
 use Modules\Clinic\Models\Questionnaire;
@@ -158,7 +159,10 @@ class AdminClinicController extends Controller
     public function responses(Request $request, Clinic $clinic, Questionnaire $questionnaire): JsonResponse
     {
         abort_unless($request->user()?->isClinicAdministrator($clinic), 403);
-        $submissions = $questionnaire->submissions()->with('answers')->latest('submitted_at')->paginate($request->integer('per_page', 50));
+        $submissions = $questionnaire->submissions()
+            ->with(['answers', 'questionnaire:id,clinic_id,name,slug'])
+            ->latest('submitted_at')
+            ->paginate($this->perPage($request));
 
         return response()->json([
             'data' => $submissions->getCollection()->map(fn (Submission $submission): array => $this->responseData($submission))->all(),
@@ -177,6 +181,44 @@ class AdminClinicController extends Controller
         abort_unless($questionnaire->clinic_id === $clinic->id, 404);
 
         return $this->responses($request, $clinic, $questionnaire);
+    }
+
+    public function currentAllResponses(Request $request): JsonResponse
+    {
+        $clinic = $this->currentClinic($request);
+        $submissions = Submission::query()
+            ->whereHas('questionnaire', fn ($query) => $query->where('clinic_id', $clinic->id))
+            ->with(['answers', 'questionnaire:id,clinic_id,name,slug'])
+            ->latest('submitted_at')
+            ->paginate($this->perPage($request));
+
+        return response()->json([
+            'data' => $submissions->getCollection()->map(fn (Submission $submission): array => $this->responseData($submission))->all(),
+            'meta' => [
+                'current_page' => $submissions->currentPage(),
+                'last_page' => $submissions->lastPage(),
+                'per_page' => $submissions->perPage(),
+                'total' => $submissions->total(),
+            ],
+        ]);
+    }
+
+    public function updateCurrentResponse(
+        UpdateSubmissionStatusRequest $request,
+        Questionnaire $questionnaire,
+        Submission $submission,
+    ): JsonResponse {
+        $clinic = $this->currentClinic($request);
+        abort_unless(
+            $questionnaire->clinic_id === $clinic->id && $submission->questionnaire_id === $questionnaire->id,
+            404,
+        );
+
+        $submission->update($request->validated());
+
+        return response()->json([
+            'data' => $this->responseData($submission->fresh()->load(['answers', 'questionnaire:id,clinic_id,name,slug'])),
+        ]);
     }
 
     private function currentClinic(Request $request): Clinic
@@ -250,6 +292,11 @@ class AdminClinicController extends Controller
             'status' => $submission->status,
             'metadata' => $submission->metadata,
             'submittedAt' => $submission->submitted_at?->toISOString(),
+            'questionnaire' => [
+                'id' => $submission->questionnaire->id,
+                'name' => $submission->questionnaire->name,
+                'slug' => $submission->questionnaire->slug,
+            ],
             'answers' => $submission->answers->mapWithKeys(fn ($answer): array => [$answer->question_key => $answer->value['value'] ?? null])->all(),
         ];
     }
@@ -282,5 +329,10 @@ class AdminClinicController extends Controller
         }
 
         return $slug;
+    }
+
+    private function perPage(Request $request): int
+    {
+        return min(max($request->integer('per_page', 50), 1), 200);
     }
 }
