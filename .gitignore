@@ -8,6 +8,10 @@ package-lock.json
 .phpactor.json
 .phpunit.result.cache
 /.codex
+/.agents
+/.claude
+/.junie
+/.mcp.json
 /.cursor/
 /.idea
 /.nova
